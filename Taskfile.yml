@@ -1,0 +1,98 @@
+version: '3'
+
+vars:
+  TOFU: '{{default "tofu" .TOFU}}'
+  TFDOCS_IMAGE: quay.io/terraform-docs/terraform-docs:0.20.0@sha256:37329e2dc2518e7f719a986a3954b10771c3fe000f50f83fd4d98d489df2eae2
+  TFLINT_IMAGE: ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c45a6ea8b58655fd66433d4ca3b1bc631c574a48d120bd19f
+  ACTIONLINT_IMAGE: rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+
+tasks:
+  default:
+    desc: List available development tasks
+    cmds:
+      - task --list
+
+  fmt:
+    desc: Format OpenTofu configuration
+    cmds:
+      - '{{.TOFU}} fmt -recursive'
+
+  fmt:check:
+    desc: Check OpenTofu formatting
+    cmds:
+      - '{{.TOFU}} fmt -check -recursive'
+
+  init:
+    desc: Initialize the root module without configuring a backend
+    cmds:
+      - '{{.TOFU}} init -backend=false'
+
+  validate:
+    desc: Initialize and validate the root module with OpenTofu
+    deps: [init]
+    cmds:
+      - '{{.TOFU}} validate'
+
+  lint:
+    desc: Lint all OpenTofu configurations with Docker
+    cmds:
+      - 'docker run --rm --user "$(id -u):$(id -g)" --volume "{{.TASKFILE_DIR}}:/workspace" --workdir /workspace {{.TFLINT_IMAGE}} --recursive'
+
+  docs:
+    desc: Regenerate OpenTofu input and output documentation in README.md with Docker
+    cmds:
+      - 'docker run --rm --user "$(id -u):$(id -g)" --volume "{{.TASKFILE_DIR}}:/workspace" --workdir /workspace {{.TFDOCS_IMAGE}} markdown table .'
+
+  docs:check:
+    desc: Check OpenTofu documentation in README.md with Docker
+    cmds:
+      - 'docker run --rm --user "$(id -u):$(id -g)" --volume "{{.TASKFILE_DIR}}:/workspace" --workdir /workspace {{.TFDOCS_IMAGE}} markdown table --output-check .'
+
+  workflow:lint:
+    desc: Lint GitHub Actions workflows with Docker
+    cmds:
+      - 'docker run --rm --volume "{{.TASKFILE_DIR}}:/workspace:ro" --workdir /workspace {{.ACTIONLINT_IMAGE}} -color .github/workflows/*.yml'
+
+  test:native:
+    desc: Run mocked native OpenTofu tests without creating infrastructure
+    cmds:
+      - '{{.TOFU}} test -no-color'
+
+  test:
+    desc: Run all module tests
+    deps: [test:native]
+
+  ci:
+    desc: Run every check used by continuous integration
+    cmds:
+      - task fmt:check
+      - task validate
+      - task lint
+      - task docs:check
+      - task workflow:lint
+      - task test
+
+  release:plugins:
+    desc: Restore the Semrel release plugins pinned in .semrel.lock
+    cmds:
+      - semrel plugin restore
+
+  release:check:
+    desc: Run CI checks and preview the next release without changing GitHub or git
+    deps: [ci, release:plugins]
+    cmds:
+      - semrel config validate
+      - semrel lint
+      - semrel release --dry-run
+
+  release:prepare:
+    internal: true
+    cmds:
+      - 'git config user.name >/dev/null || git config user.name "${GIT_RELEASE_NAME:-github-actions[bot]}"'
+      - 'git config user.email >/dev/null || git config user.email "${GIT_RELEASE_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"'
+
+  release:
+    desc: Create a Git tag and GitHub Release from main; requires GitHub credentials
+    deps: [release:check, release:prepare]
+    cmds:
+      - semrel release

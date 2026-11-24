@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.0'
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version_file: .opentofu-version
+          tofu_wrapper: false
+
+      - uses: arduino/setup-task@v3
+
+      - name: Run CI checks
+        run: task ci
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    concurrency:
+      group: semrel-release-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.0'
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version_file: .opentofu-version
+          tofu_wrapper: false
+
+      - uses: arduino/setup-task@v3
+
+      - name: Install semrel
+        run: go install github.com/SemRels/semrel/cmd/semrel@v0.26.2
+
+      - name: Restore pinned Semrel provider
+        run: semrel plugin restore
+
+      - name: Configure disposable Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Release
+        env:
+          SEMREL_PLUGIN_TOKEN: ${{ github.token }}
+        run: task release
